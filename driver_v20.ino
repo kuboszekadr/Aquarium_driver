@@ -3,7 +3,7 @@
 
 #include <RtcDS1302.h> //RTC 
 #include <DS18B20.h> //termometr 
-#include <SoftwareSerial.h> 
+#include <SoftwareSerial.h>
 
 /*
  * PINS DEFINITIONS
@@ -15,13 +15,19 @@
 
 #define THERMOMETER 6
 
-#define ESP_RX 7
-#define ESP_TX 8
+#define SUMP_ECHO 7
+#define SUMP_TRIG 8
+
+#define AQUARIUM_ECHO 9
+#define AQUARIUM_TRIG 10
+
+#define ESP_RX 12
+#define ESP_TX 13
 
 // Others
-#define ESP_Banwidth 1
-#define ESP_TargetNetworkSSD "Zdrajcy metalu" //name of network to be connected to
-#define ESP_TargetNetworkPWD "Dz3nt31m3n_m3ta1u" //target network password
+#define ESP_Banwidth 9600
+#define ESP_TargetNetworkSSD "TP-LINK_BE0B92" //name of network to be connected to
+#define ESP_TargetNetworkPWD "5krokusowa5" //target network password
 
 ThreeWire RTCWire(RTC_IO, RTC_SCLK, RTC_CE); // IO, SCLK, CE
 RtcDS1302<ThreeWire> Rtc(RTCWire); // initalizes RTC
@@ -34,20 +40,92 @@ DS18B20 Thermo(&ThermoWire);
 void setup() {
   Serial.begin(9600);
 
+  Serial.println("Launching WiFi...");
   init_ESP();
+
+  Serial.println("Lauching RTC...");
   init_RTC();
+
+  Serial.println("Launching termo...");
   init_Thermo();
 
+  Serial.println("Launing HCSR...");
+  init_HCSR();
+
+  Serial.println("Setup finished.");
+  Serial.println("");
 }
 
 void loop() {
-  Serial.print(timestamp());
-  Serial.print(get_temperature());
+  String data = timestamp();
+  
+  data += "\tTemp:";
+  data += get_temperature();
+  
+  data += "\tSumpLevel:";
+  data += get_water_level();
+  
+  Serial.println(data);
+
+  String r = ESP.readString();
+  Serial.println(r);
+
+  if (r.indexOf("CONNECT") != -1) {
+    Serial.println("New connection available...\nSending data...");
+    ESP.println("AT+CIPSEND=0," + String(data.length()));
+    delay(100);
+    
+    if (ESP.find(">")) {Serial.println("Sending..."); ESP.print(data);};
+    if (ESP.find("SEND OK")) {Serial.println("Packet sent");};
+  
+    ESP.println("AT+CIPCLOSE=0");
+    delay(500);
+    Serial.println(ESP.readString());
+  }
+
+  delay(500);
+
 }
 
 // inits ESP and connects to target network 
 void init_ESP() {
+  ESP.begin(9600);
+
+  Serial.println("Restarting module...");
+  send_esp_command("AT+RST");  
+  send_esp_command("AT+CWMODE=1");
+  send_esp_command("AT+CIPMODE=0");
+  send_esp_command("AT+CIPMUX=1");
+
+  Serial.println("Connecting to target network...");
+  send_esp_command("AT+CWJAP=\"TP-LINK_BE0B92\",\"5krokusowa5\""); 
+
+  Serial.println("Getting IP address...");
+  retreive_esp_command("AT+CIPSTA?");
+
+  send_esp_command("AT+CIPSERVER=1,80");
+}
+
+void retreive_esp_command(String cmd) {
+  ESP.println(cmd);
+  String r = ESP.readString();
+
+  while (r.indexOf("OK") == 0) {
+    ESP.println(cmd);
+    delay(500);
+    r = ESP.readString();
+  }
+  Serial.println(r);
+}
+
+void send_esp_command(String cmd){
+  //ESP.readString();
+  ESP.println(cmd);
   
+  while (ESP.find("OK") == 0) {
+    ESP.println(cmd);
+    delay(500);
+  }
 }
 
 void init_RTC() {
@@ -90,6 +168,24 @@ void init_Thermo() {
   Thermo.request(ThermoAddress);  
 }
 
+//Inits HCSR to get water level in each section
+void init_HCSR() {
+  pinMode(SUMP_TRIG, OUTPUT);
+  pinMode(SUMP_ECHO, INPUT);
+
+  pinMode(AQUARIUM_TRIG, OUTPUT);
+  pinMode(AQUARIUM_ECHO, INPUT);
+}
+
+float get_water_level() {
+  digitalWrite(SUMP_TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(SUMP_TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(SUMP_TRIG, LOW);
+ 
+  return pulseIn(SUMP_ECHO, HIGH) / 58.0;
+}
 //Reads data from thermometer in Celsius
 float get_temperature() {
   if (Thermo.available()) {
