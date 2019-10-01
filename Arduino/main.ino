@@ -1,208 +1,129 @@
-#include <OneWire.h> //helper for thermometer
-#include <ThreeWire.h> //helper for RTC
-
-#include <RtcDS1302.h> //RTC 
-#include <DS18B20.h> //termometr 
 #include <SoftwareSerial.h>
+#include <OneWire.h>
+#include <DS18B20.h>
 
-/*
- * PINS DEFINITIONS
- */
-//RTC
-#define RTC_CE 3 // RST
-#define RTC_SCLK 4 // CLK
-#define RTC_IO 5 // DAT
+#include <ESP_8266.h>
+#include <ReadingsQueue.h>
 
-#define THERMOMETER 6
+#include <RTC.h>
 
-#define SUMP_ECHO 7
-#define SUMP_TRIG 8
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
 
-#define AQUARIUM_ECHO 9
-#define AQUARIUM_TRIG 10
+// ESP configuration data
+String HOST= "192.168.0.179";
+String SSID = "Zdrajcy metalu";
+String PWD = "Dz3nt31m3n_m3ta1u";
 
-#define ESP_RX 12
-#define ESP_TX 13
+ESP esp(13, 12); // rx, tx
+RTC rtc(5, 3, 4); // 
 
-// Others
-#define ESP_Banwidth 9600
-#define ESP_TargetNetworkSSD "TP-LINK_BE0B92" //name of network to be connected to
-#define ESP_TargetNetworkPWD "5krokusowa5" //target network password
+ReadingsQueue readings;
+Reading reading;
 
-ThreeWire RTCWire(RTC_IO, RTC_SCLK, RTC_CE); // IO, SCLK, CE
-RtcDS1302<ThreeWire> Rtc(RTCWire); // initalizes RTC
-SoftwareSerial ESP(ESP_RX, ESP_TX);
+// DS18B20
+byte address[8] = {0x28, 0x25, 0x34, 0xE5, 0x8, 0x0, 0x0, 0x35};
+OneWire onewire(2);
+DS18B20 sensors(&onewire);
 
-byte ThermoAddress[8] = {0x28, 0x25, 0x34, 0xE5, 0x8, 0x0, 0x0, 0x35};
-OneWire ThermoWire(THERMOMETER);
-DS18B20 Thermo(&ThermoWire);
+// LCD
+LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 16 chars and 2 line display
 
-void setup() {
-  Serial.begin(9600);
+char logs[4][20];
 
-  Serial.println("Launching WiFi...");
-  init_ESP();
+void setup()
+{
+    Serial.begin(9600);
 
-  Serial.println("Lauching RTC...");
-  init_RTC();
+    lcd.init(); 
+    lcd.backlight();
 
-  Serial.println("Launching termo...");
-  init_Thermo();
+    log("RTC connection");
+    log(rtc.init()?"1":"0");
+    // rtc.set_date(2019, 10, 1, 10, 21, 0);
 
-  Serial.println("Launing HCSR...");
-  init_HCSR();
+    log("ESP");
+    log("Connection");
+    log(esp.connected()?"1":"0");
 
-  Serial.println("Setup finished.");
-  Serial.println("");
+    log("Restarting");
+    log(esp.restart()?"1":"0");
+
+    log("WiFi connection");
+    log(esp.connect_wifi(&SSID, &PWD)?"1":"0");
+
+    log("Setup complete");
+
+    sensors.begin(12);
+    sensors.request(address);
 }
 
-void loop() {
-  String data = timestamp();
-  
-  data += "\tTemp:";
-  data += get_temperature();
-  
-  data += "\tSumpLevel:";
-  data += get_water_level();
-  
-  Serial.println(data);
+void loop()
+{
+    if(sensors.available())
+        get_temp();
 
-  String r = ESP.readString();
-  Serial.println(r);
+    while (!readings.is_empty())
+    {
+        Reading r = readings.pop();
+        // log("Sending data to the server...");
+        esp.send_post_request(HOST, &r);
 
-  if (r.indexOf("CONNECT") != -1) {
-    Serial.println("New connection available...\nSending data...");
-    ESP.println("AT+CIPSEND=0," + String(data.length()));
-    delay(100);
+    }
+
+    Serial.println("availableMemory:" + (String) availableMemory());
+    delay(500);
+}
+
+int availableMemory()
+{
+  int size = 8192;
+  byte *buf;
+  while ((buf = (byte *) malloc(--size)) == NULL);
+  free(buf);
+  return size;
+}
+
+void log(const char *msg)
+{
+    Serial.println(msg);
+    lcd.clear();
+
+    for (int i = 1; i < 4; i++)
+    {
+        lcd.setCursor(0, i-1); 
+        lcd.print(logs[i]);
+
+        memset(logs[i-1], 0, sizeof(logs[i-1]));   // clear data before offseting     
+        strcpy(logs[i-1], logs[i]); // offset logs by one
+    }
+
+    memset(logs[3], 0, sizeof(logs[3]));   // clear data before offseting     
+    strcpy(logs[3], msg); // insert new message
     
-    if (ESP.find(">")) {Serial.println("Sending..."); ESP.print(data);};
-    if (ESP.find("SEND OK")) {Serial.println("Packet sent");};
-  
-    ESP.println("AT+CIPCLOSE=0");
-    delay(500);
-    Serial.println(ESP.readString());
-  }
-
-  delay(500);
-
+    lcd.setCursor(0, 3);
+    lcd.print(logs[3]);
 }
 
-// inits ESP and connects to target network 
-void init_ESP() {
-  ESP.begin(9600);
+void get_temp()
+{
+    struct Reading reading;
+    reading.id_sensor = 1;
+    reading.reading = sensors.readTemperature(address);;        
+    rtc.get_timestamp(reading.timestamp); // get timestamp        
 
-  Serial.println("Restarting module...");
-  send_esp_command("AT+RST");  
-  send_esp_command("AT+CWMODE=1");
-  send_esp_command("AT+CIPMODE=0");
-  send_esp_command("AT+CIPMUX=1");
+    sensors.request(address);
+    (void) readings.add(&reading);
 
-  Serial.println("Connecting to target network...");
-  send_esp_command("AT+CWJAP=\"TP-LINK_BE0B92\",\"5krokusowa5\""); 
+    char _temp[6];
+    dtostrf(reading.reading, 2, 2, _temp);
 
-  Serial.println("Getting IP address...");
-  retreive_esp_command("AT+CIPSTA?");
+    char _log[13] = "Temp: ";
+    strcat(_log, _temp);
 
-  send_esp_command("AT+CIPSERVER=1,80");
+    log(reading.timestamp);
+    log(_log);
+
+    memset(_log, 0, sizeof(_log));
+    memset(_temp, 0, sizeof(_temp));
 }
-
-void retreive_esp_command(String cmd) {
-  ESP.println(cmd);
-  String r = ESP.readString();
-
-  while (r.indexOf("OK") == 0) {
-    ESP.println(cmd);
-    delay(500);
-    r = ESP.readString();
-  }
-  Serial.println(r);
-}
-
-void send_esp_command(String cmd){
-  //ESP.readString();
-  ESP.println(cmd);
-  
-  while (ESP.find("OK") == 0) {
-    ESP.println(cmd);
-    delay(500);
-  }
-}
-
-void init_RTC() {
-  Rtc.Begin(); //init RTC clock
-
-  if (Rtc.GetIsRunning()) { //check if clock is running
-    Serial.println("Clock is working");
-  }
-  else {
-    Serial.println("Clock is not working!");
-  }
-
-  Rtc.SetIsWriteProtected(true); //make sure that clock is protected
-}
-
-//Returns current timestamp
-String timestamp() {
-  RtcDateTime dt = Rtc.GetDateTime();
-  
-  int year = dt.Year();
-  int month = dt.Month();
-  int day = dt.Day();
-
-  int hour = dt.Hour();
-  int minute = dt.Minute();
-  int second = dt.Second();
-
-  String result = (String) year;
-  result += print_2digits(month);
-  result += print_2digits(day);
-  result += print_2digits(hour);
-  result += print_2digits(minute);
-  result += print_2digits(second);
-
-  return result;
-}
-
-void init_Thermo() {
-  Thermo.begin();
-  Thermo.request(ThermoAddress);  
-}
-
-//Inits HCSR to get water level in each section
-void init_HCSR() {
-  pinMode(SUMP_TRIG, OUTPUT);
-  pinMode(SUMP_ECHO, INPUT);
-
-  pinMode(AQUARIUM_TRIG, OUTPUT);
-  pinMode(AQUARIUM_ECHO, INPUT);
-}
-
-float get_water_level() {
-  digitalWrite(SUMP_TRIG, LOW);
-  delayMicroseconds(2);
-  digitalWrite(SUMP_TRIG, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(SUMP_TRIG, LOW);
- 
-  return pulseIn(SUMP_ECHO, HIGH) / 58.0;
-}
-//Reads data from thermometer in Celsius
-float get_temperature() {
-  if (Thermo.available()) {
-    float temp = Thermo.readTemperature(ThermoAddress);
-    Thermo.request(ThermoAddress);
-
-    return temp;
-  }
-  return -1;
-}
-
-//Converts single digit number to double digit
-//f.e 9 -> 09, 10 -> 10, 0 -> 00
-String print_2digits(int value) {
-  if (value < 10) { 
-    return '0' + (String) value;
-  }
-  return (String) value;
-}
-
