@@ -3,10 +3,12 @@
 
 #define MAX_SIZE 10
 
+#include <Arduino.h>
+
 struct Reading
 {
   int id_sensor;
-  float reading;
+  float value;
   char timestamp[17];
 };
 
@@ -19,6 +21,8 @@ class ReadingsQueue
         bool add(Reading*);
         bool is_empty();
         bool is_full();
+
+        void generate_post_request(char *post_data, const char *sep);
 
     private:
         Reading _queue[MAX_SIZE];

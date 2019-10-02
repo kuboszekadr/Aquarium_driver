@@ -20,15 +20,15 @@ class ESP
         bool execute_at(const String cmd);
         bool execute_at(const String cmd, const String escape, int i);
 
-        bool send_post_request(const String host, Reading *r);
+        bool send_post_request(const String host, ReadingsQueue *queue);
         bool connected();
 
     private:
         SoftwareSerial *_self;
         int _status;
 
-        char _command[300];
-        char _post_data[128];
+        char _command[512];
+        char _post_data[256];
         
         String _last_status;
         String _host;

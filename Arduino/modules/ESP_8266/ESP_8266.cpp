@@ -70,13 +70,13 @@ char ESP::connection_status()
     (void) execute_at("AT+CIPSTATUS");
     bool is_connected = _last_status.charAt(_last_status.indexOf("STATUS:") + 7);
 
-    if (is_connected)
-        Serial.println("Already connected");
+    // if (is_connected)
+    //     Serial.println("Already connected");
     
     return is_connected;
 }
 
-bool ESP::send_post_request(const String host, Reading *r)
+bool ESP::send_post_request(const String host, ReadingsQueue *queue)
 {
     // Check if connection is still alive...
     if (!connect_host(host)) 
@@ -84,25 +84,9 @@ bool ESP::send_post_request(const String host, Reading *r)
         Serial.println("Can not connect to host");
         return false;
     } 
-        
-    // sensor id
-    char id_sensor[3];
-    dtostrf(r->id_sensor, 2, 0, id_sensor);
-    
-    strcpy (_post_data, "id_sensor=");
-    strcat (_post_data, id_sensor);
-    
-    // reading value
-    char reading[6]; 
-    dtostrf(r->reading, 2, 2, reading);
 
-    strcat (_post_data, "&value=");
-    strcat (_post_data, reading);
-
-    // timestamp
-    strcat (_post_data, "&timestamp=");
-    strcat (_post_data, r->timestamp);
-    strcat (_post_data, "&user=aquarium_arduino&pwd=test");
+    queue->generate_post_request(_post_data, ";"); // generate post data string
+    strcat (_post_data, "&user=aquarium_arduino&pwd=test"); // add user and pwd
 
     char post_data_l[6];
     dtostrf(strlen(_post_data), 2, 0, post_data_l);    
