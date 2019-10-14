@@ -52,7 +52,7 @@ void ReadingsQueue::generate_post_request(char* post_data, const char* sep)
     char readings[50] = "&value=";
     char timestamps[100] = "&timestamp=";
 
-    char id_sensor[3];
+    char id_sensor[2];
     char reading[6];
 
     Reading r;
@@ -60,7 +60,7 @@ void ReadingsQueue::generate_post_request(char* post_data, const char* sep)
     {
         r = this->pop();    
 
-        dtostrf(r.id_sensor, 2, 0, id_sensor);
+        dtostrf(r.id_sensor, 1, 0, id_sensor);
         strcat(id_sensors, id_sensor);
         strcat(id_sensors, sep);
 

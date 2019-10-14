@@ -8,16 +8,18 @@
 class RTC
 {
     public:
-        RTC(int rts, int clk, int dat);
-
-        bool init();
-        void set_date(int year, int month, int day, int hour, int minute, int second);
-        void get_timestamp(char *timestamp);
+        static RTC& get_instance();
+        
+        void init(int rts, int clk, int dat);
+        static void get_timestamp(char *timestamp);
 
     private:
-        int _rts;
-        int _clk;
-        int _dat;
+        RTC() {}
+        RTC(const RTC&) {};
+
+        int _rts = -1;
+        int _clk = -1;
+        int _dat = -1;
 
         ThreeWire *_RTCWire;
         RtcDS1302<ThreeWire> *_rtc;

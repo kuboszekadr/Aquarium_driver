@@ -4,13 +4,7 @@
 #define MAX_SIZE 10
 
 #include <Arduino.h>
-
-struct Reading
-{
-  int id_sensor;
-  float value;
-  char timestamp[17];
-};
+#include <Sensor.h>
 
 class ReadingsQueue
 {

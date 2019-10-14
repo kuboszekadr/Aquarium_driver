@@ -8,187 +8,245 @@ ESP::ESP(int rx_pin,  int tx_pin)
 
 bool ESP::connected()
 {
-    return execute_at("AT");
+    return execute_at("AT");  // test ESP response
 }
 
 bool ESP::restart()
 {
-    bool t = execute_at("AT+RST");
-    bool x = execute_at("AT+CIPMODE=0");
+    bool rst = execute_at("AT+RST");  // restart ESP  
+    delay(2000);  // wait for reastart
+    clear_buffer(_self);  // clean leftovers
 
-    return (x && t);
+    (void) execute_at("ATE0");  // turn the echo off
+    bool mode = execute_at("AT+CIPMODE=0");  // set ESP in normal transmission mode
+
+    return (rst && mode);
 }
 
-bool ESP::execute_at(const String cmd)
+bool ESP::execute_at(const char *cmd)
 {
-    return execute_at(cmd, "OK", 0);
+    return execute_at(cmd, "OK");
 }
 
-bool ESP::connect_wifi(const String *ssid, const String *pwd)
+bool ESP::connect_wifi(const char *ssid, const char *pwd)
 {
-    _self->println("AT+CWJAP=\"" + *ssid + "\",\"" + *pwd + "\"");
-    delay(100);
-
-    String resp = "";
+    sprintf(_command, "AT+CWJAP=\"%s\",\"%s\"", ssid, pwd);  // generate AT command
+    print_serial(_command, _self);  // send to the buffer
+    
     int i = 0;
-
-    while (true)
+    _is_connected = false;  // set ESP as not connected
+    
+    while (!_is_connected)
     {
         // check if new data is available
         if(_self->available() > 0)
-        {   
-            resp = _self->readString(); // read current return
-            if(resp.indexOf("FAIL") > 0) // check if response is an error
-            {
-                _handle_err(&resp); // parse response to check error
-                break;
-            }
-            else if (resp.indexOf("OK")>0) {return true; }
-            
-        }
-        else {delay(500);} //wait for new data
+        {              
+            read_serial(_last_status, 256, _self);
 
-        if (i == 50){Serial.println("Connection takes longer then expected...");}
+            // check if response is an error
+            if(strstr(_last_status, "FAIL")) 
+            {
+                Logger::log(_last_status);  // show the error message
+//                _handle_err(&resp); // parse response to check error
+               break;
+            }
+            else if (strstr(_last_status, "OK"))
+            {
+                char msg[100];
+                sprintf(msg, "Connected to: %s", ssid);
+                Logger::log(msg);
+
+                clear_buffer(_self);
+                _is_connected = true;
+            }
+        }
+        else    
+            delay(500);  // wait for new data
+
+        if (i == 50)    
+            Logger::log("Connection takes longer then expected...");
         if (i >= 100)
         {
-            Serial.println("Connection timeout");
+            Logger::log("Connection timeout");
             break;
         }
-        i+=1;
+        i++;
     }
-    return false;
+
+    clear_buffer(_self);
+    return _is_connected;
 }
 
-bool ESP::connect_host(const String host)
+bool ESP::connect_host(const char *host)
 {
-    if ((int)connection_status() == int('3')) {return true; } // already connected
-    return execute_at("AT+CIPSTART=\"TCP\",\"" + host + "\",80"); // open new connection
+    char status = connection_status();  // get connection status
+
+    // check if connection is not open
+    if (status == '3') 
+        return true;  // return true if connection is alive
+
+    // otherwise open new connection
+    clear(_command);  // clear previous command
+    sprintf(_command, "AT+CIPSTART=\"TCP\",\"%s\",80", host);
+
+    return execute_at(_command); 
 }
 
 char ESP::connection_status()
-{
-    (void) execute_at("AT+CIPSTATUS");
-    bool is_connected = _last_status.charAt(_last_status.indexOf("STATUS:") + 7);
-
-    // if (is_connected)
-    //     Serial.println("Already connected");
-    
-    return is_connected;
+{ 
+    (void) execute_at("AT+CIPSTATUS"); // get current connection status   
+    return _last_status[7]; // return status char
 }
 
-bool ESP::send_post_request(const String host, ReadingsQueue *queue)
+bool ESP::send_post_request(const char *host, const ReadingsQueue &queue)
 {
+    Logger::log("Connecting to the host...");
+
     // Check if connection is still alive...
     if (!connect_host(host)) 
     {
-        Serial.println("Can not connect to host");
+        Logger::log("Can not connect to host");
         return false;
     } 
 
-    queue->generate_post_request(_post_data, ";"); // generate post data string
-    strcat (_post_data, "&user=aquarium_arduino&pwd=test"); // add user and pwd
+    Logger::log("Creating post request string...");
+    queue.generate_post_request(_post_data, ";");  // generate post data string
+    strcat (_post_data, "&user=aquarium_arduino&pwd=test");  // add user and pwd 
 
-    char post_data_l[6];
-    dtostrf(strlen(_post_data), 2, 0, post_data_l);    
+    clear (_command);
+    sprintf(_command, 
+            "POST /aquarium_post.php HTTP/1.1\r\n" \
+            "Host: 198.160.0.179\r\n" \
+            "Content-length: %d\r\n" \
+            "Connection: Keep-Alive\r\n" \
+            "User-Agent: Aquarium_Arduino\r\n" \
+            "Content-type: application/x-www-form-urlencoded\r\n\r\n" \
+            "%s", strlen(_post_data), _post_data);
+    
+    // Logger::log(_command);
+    Logger::log("Openning connection...");
 
-    strcpy (_command, "POST /aquarium_post.php HTTP/1.1\r\n");
-    strcat (_command, "Host: 198.160.0.179\r\n");
-    strcat (_command, "Content-length: ");
-    strcat (_command, post_data_l);
-    strcat (_command, "\r\n");
-    strcat (_command, "Connection: Keep-Alive\r\n");
-    strcat (_command, "User-Agent: Aquarium_Arduino\r\n");
-    strcat (_command, "Content-type: application/x-www-form-urlencoded\r\n\r\n");
-    strcat (_command, _post_data);
-
-    Serial.println("Openning connection...");
+    // I want to have post request data ready to send
+    // thus i am sending AT command manually
     _self->print("AT+CIPSEND="); 
     _self->println(strlen(_command));
-    delay(200); // wait for the response
-    
-    // check if ESP responded
-    _last_status = _self->readString();
-    if(_last_status.indexOf(">") > 0) {Serial.println("Sending data..."); } 
-    else 
+    _self->flush();  // wait for data transfer
+    delay(500);  // wait for the response
+
+    Logger::log("Reading response from the ESP...");
+    read_serial(_last_status, 256, _self);  // get ESP response
+
+    if (strstr(_last_status, ">")) // response as expected
+        Logger::log("Sending data..."); 
+    else // ups...
     {
-        Serial.println("Data not sent.");
-        Serial.println("Error data:");
-        Serial.println(_last_status);
+        Logger::log("Sending error, ESP response below:");
+        Logger::log(_last_status);
 
-        execute_at("AT+CIPCLOSE"); // disconnect from the server
-
+        // clear the data
+        clear(_post_data);
+        clear(_command);
+        clear_buffer(_self);
+        delay(500);
+       (void) execute_at("AT+CIPCLOSE");  // disconnect from the server
         return false;
     }
 
-   _self->print(_command);
-    delay(100);
+    _self->print(_command);  // sending post request
+    _self->flush();  // wait for transfer
 
-    Serial.println("Data sent...");
-    
-    // free up the memory
-    memset(_post_data, 0, sizeof(_post_data));
-    memset(_command, 0, sizeof(_command));
+    Logger::log("Post request data sent...");
+    Logger::log("Waiting for feedback.");
+    delay(1000);  // wait to read full response
+
+    Logger::log("ESP response:");
+    read_serial(_last_status, 256, _self);
+    Logger::log(_last_status);
+
+    // clear the data
+    clear(_post_data);
+    clear(_command);
+    clear_buffer(_self);
 
     return true;
 }
 
-void ESP::_handle_err(const String *msg)
-{
-    Serial.println("AP connection error:");
-    char errcode = msg->charAt(msg->indexOf("CWJAP:")+6);
+// void ESP::_handle_err(const String *msg)
+// {
+//     Serial.println("AP connection error:");
+//     char errcode = msg->charAt(msg->indexOf("CWJAP:")+6);
 
-    switch (errcode)
+//     switch (errcode)
+//     {
+//     case '1':
+//         Serial.println("Timeout");
+//         break;
+//     case '2':
+//         Serial.println("Wrong password");
+//         break;
+//     case '3':
+//         Serial.println("SSID not found");
+//         break;
+//     case '4':
+//         Serial.println("Connection failed");
+//         break;
+//     default:
+//         Serial.println("Unknow error...");
+//         break;
+//     }
+
+//     return;
+// }
+
+bool ESP::execute_at(const char *cmd, const char *escape)
+{
+    int i = 0;
+    bool status = false;
+
+    while (!status & i < TIMEOUT)
     {
-    case '1':
-        Serial.println("Timeout");
-        break;
-    case '2':
-        Serial.println("Wrong password");
-        break;
-    case '3':
-        Serial.println("SSID not found");
-        break;
-    case '4':
-        Serial.println("Connection failed");
-        break;
-    default:
-        Serial.println("Unknow error...");
-        break;
+        i++;
+        status = _execute_at(cmd, escape);
+        delay(500);
+    }
+    
+    if (i==10)
+    {
+        Logger::log("Connection timeout. ESP response:");
+        Logger::log(_last_status);
     }
 
-    return;
+    clear_buffer(_self);  // remove leftovers
+    return status;
 }
 
-bool ESP::execute_at(const String cmd, const String escape, int i)
+bool ESP::_execute_at(const char *cmd, const char *escape)
 {
-    if (i>=10) 
-    {
-        _last_status = "timeout";
-        return false; 
-    } // timeout
-
-    _self->flush(); // clear buffer before seding command
-    delay(100);
-
     // send command and wait for response
-    _self->println(cmd); 
-    while (_self->available() == 0) { delay(100); } // wait for response
+    print_serial(cmd, _self); 
     
-    String response;
-    response = _self->readString();
-    _last_status = response;
+    // wait for response
+    while (_self->available() == 0) 
+        delay(100); 
+    
+    // get response
+    read_serial(_last_status, 256, _self); 
 
-    if (response.indexOf(escape) > 0) { return true; }
-    while (response.indexOf("busy") > 0) // check if serial is busy
+    // check if ESP response is OK
+    if (strstr(_last_status, escape)) 
+        return true;
+    
+    // check if serial is busy if yes, wait
+    while (strstr(_last_status, "busy")) 
     {
-        _self->flush(); // clear buffer before serial testing
-        delay(100);
+        print_serial("AT", _self);
+        read_serial(_last_status, 256, _self);
+        
+        if (strstr(_last_status, "OK"))
+            break; // break if serial is ready
 
-        _self->println("AT"); // check if ESP is ready for commands
-        delay(100);
-        response=_self->readString(); // read response
-        if (response.indexOf("OK") > 0){break;} // break if serial is ready
+        Logger::log("Waiting for serial to free...");
+        delay(1000);
     }
-
-    return execute_at(cmd, escape, i+1);
+    return false; // force next command execution
 }

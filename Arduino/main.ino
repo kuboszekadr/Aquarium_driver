@@ -1,171 +1,176 @@
-#include <SoftwareSerial.h>
+// Communication
 #include <OneWire.h>
-#include <DS18B20.h>
-
+#include <ThreeWire.h>
+#include <Wire.h> 
 #include <ESP_8266.h>
+#include <Adafruit_NeoPixel.h>
+#include <SPI.h>
+#include <SD.h>
+
+// Displays
+#include <LiquidCrystal_I2C.h>
+#include <SoftwareSerial.h>
+
+// Sensors
 #include <PhMeter.h>
+#include <WaterLevel.h>
+#include <Thermometer.h>
+
+// Helpers
+#include <Utils.h>
+#include <Log.h>
+#include <RTC.h>
 #include <ReadingsQueue.h>
 
-#include <RTC.h>
-#include <WaterLevel.h>
-
-#include <Wire.h> 
-#include <LiquidCrystal_I2C.h>
-
 // ESP configuration data
-String HOST= "192.168.0.179";
-String SSID = "Zdrajcy metalu";
-String PWD = "Dz3nt31m3n_m3ta1u";
-
-WaterLevel water_level_sump(6, 7, 2);
+char HOST[14] = "192.168.0.179";
+char SSID[20] = "Zdrajcy metalu";
+char PWD[20] = "Dz3nt31m3n_m3ta1u";
 
 ESP esp(13, 12); // rx, tx
-RTC rtc(5, 3, 4); // 
+
+/* SENSORS */
 PhMeter ph_meter(A0, 3);
+WaterLevel water_level_sump(6, 7, 2);
 
-ReadingsQueue readings;
-Reading reading;
+// DS18B20 - Thermometer
+char address[8] = {0x28, 0x25, 0x34, 0xE5, 0x8, 0x0, 0x0, 0x35};
+Thermometer thermometer(2, 1, address);
 
-// DS18B20
-byte address[8] = {0x28, 0x25, 0x34, 0xE5, 0x8, 0x0, 0x0, 0x35};
-OneWire onewire(2);
-DS18B20 sensors(&onewire);
+/* OTHER */
+ReadingsQueue readings;  // to hold all readings to be sent
+char msg[30];  // to create log messages
 
-// LCD
-LiquidCrystal_I2C lcd(0x27,20,4);  // set the LCD address to 0x27 for a 16 chars and 2 line display
-
-char logs[4][20];
+// Pixels
+// Adafruit_NeoPixel lamp_rigth = Adafruit_NeoPixel(200, 40, NEO_GRB + NEO_KHZ800);
+// Adafruit_NeoPixel lamp_middle = Adafruit_NeoPixel(200, 40, NEO_GRB + NEO_KHZ800);
+// Adafruit_NeoPixel lamp_left = Adafruit_NeoPixel(200, 40, NEO_GRB + NEO_KHZ800);
 
 void setup()
 {
-    Serial.begin(9600);
+    delay(2000); // wait for boot
+    Serial.begin(9600);  // available serial output
 
-    digitalWrite(30, HIGH);
-    delay(1000);
+    SD.begin(53);  // start SD card
 
-    digitalWrite(30, LOW);
-    delay(1000);
+    RTC& rtc = RTC::get_instance(); 
+    rtc.init(5, 3, 4);  // init RTC
 
+    LiquidCrystal_I2C *lcd = new LiquidCrystal_I2C(0x27,20,4);
+    Logger::set_lcd(lcd);
 
-    lcd.init(); 
-    lcd.backlight();
+    Logger::log("ESP - ready");
+    Logger::log(esp.connected());
 
-    log("RTC connection");
-    log(rtc.init()?"1":"0");
-    // rtc.set_date(2019, 10, 1, 10, 21, 0);
+    Logger::log("ESP - restarting");
+    Logger::log(esp.restart());
 
-    log("ESP");
-    log("Connection");
-    log(esp.connected()?"1":"0");
+    Logger::log("ESP - WiFi connection");
+    Logger::log(esp.connect_wifi(SSID, PWD));
 
-    log("Restarting");
-    log(esp.restart()?"1":"0");
-
-    log("WiFi connection");
-    log(esp.connect_wifi(&SSID, &PWD)?"1":"0");
-
-    log("Setup complete");
-
-    sensors.begin(12);
-    sensors.request(address);
+    Logger::log("Setup complete");
 }
 
 void loop()
 {
-    get_temp();
-    get_water_level();        
-    get_ph();
+    check_water_level();
+    read_temperature();
     send_data();
 
-    Serial.println("availableMemory:" + (String) availableMemory());
-    delay(500);
+    delay(1000);
 }
 
-int availableMemory()
+void check_water_level()
 {
-  int size = 8192;
-  byte *buf;
-  while ((buf = (byte *) malloc(--size)) == NULL);
-  free(buf);
-  return size;
-}
-
-void log(const char *msg)
-{
-    Serial.println(msg);
-    lcd.clear();
-
-    for (int i = 1; i < 4; i++)
+    // check if sensor is ready
+    if(water_level_sump.ready())
     {
-        lcd.setCursor(0, i-1); 
-        lcd.print(logs[i]);
-
-        memset(logs[i-1], 0, sizeof(logs[i-1]));   // clear data before offseting     
-        strcpy(logs[i-1], logs[i]); // offset logs by one
+        Logger::log("Getting water level");
+        bool is_read = water_level_sump.make_reading();
+        is_read ? Logger::log("OK") : Logger::log("Ups...");
     }
-
-    memset(logs[3], 0, sizeof(logs[3]));   // clear data before offseting     
-    strcpy(logs[3], msg); // insert new message
-
-    lcd.setCursor(0, 3);
-    lcd.print(logs[3]);
-}
-
-void log(Reading *r, const char *display_name)
-{
-    char _reading[6];
-    dtostrf(r->value, 2, 2, _reading);
-
-    char _log[20];
-    strcpy(_log, display_name);
-    strcat(_log, _reading);
-
-    log(r->timestamp);
-    log(_log);
-
-    memset(_log, 0, sizeof(_log));
-    memset(_reading, 0, sizeof(_reading));
-}
-
-void get_temp()
-{
-    if (!sensors.available())
-        return;
-
-    // create new reading record
-    struct Reading reading;
-    reading.id_sensor = 1;
-    reading.value = sensors.readTemperature(address);;        
-    rtc.get_timestamp(reading.timestamp); // get timestamp        
+    else
+        Logger::log("Water level sensor not ready yet");
     
-    (void) readings.add(&reading); 
-    log(&reading, "Temp:");
+    // check if queue is full
+    if(water_level_sump.available())
+    {
+        // get average water level
+        struct Reading r = water_level_sump.get_reading();
+        readings.add(&r);
+
+        // show water level
+        char water_level[6];
+        dtostrf(r.value, 2, 2, water_level);
+
+        clear(msg); // clear previous message
+        strcpy(msg, "Water level: ");
+        strcat(msg, water_level);
+        Logger::log(msg);  // log water level
+
+        // check status
+        clear(msg);  // clear previous message  
+
+        WaterStatus water_status = water_level_sump.get_water_status(); 
+        sprintf(msg, "Water status: %d", water_status);  
+        Logger::log(msg);  // log water status
+
+        switch (water_status)
+        {
+        case -1:
+            // start filling
+            break;
+        case 0:
+            // stop filling
+            break;
+        case 1:
+            break;
+        default:
+            break;
+        }
+    }
 }
 
-void get_water_level()
+void read_temperature()
 {
-    // create new reading record
-    struct Reading reading;
-    reading.id_sensor = water_level_sump.id_sensor();
-    reading.value = water_level_sump.get_water_level();
-    rtc.get_timestamp(reading.timestamp); // get timestamp
+    if (thermometer.ready())
+    {
+        Logger::log("Getting temperature");
+        bool is_read = thermometer.make_reading();  // make reading
+        is_read ? Logger::log("OK") : Logger::log("Ups...");
+    }
+    else
+        Logger::log("Thermometer not ready yet");
 
-    (void) readings.add(&reading);
-    log(&reading, "WL S:");
-}
+    if (thermometer.available())
+    {
+         // get average temperature
+        struct Reading r = thermometer.get_reading();
+        readings.add(&r);
 
-void get_ph()
-{
-    struct Reading reading;
-    reading.id_sensor = ph_meter.get_id_sensor();
-    reading.value = ph_meter.get_ph();
-    rtc.get_timestamp(reading.timestamp); // get timestamp
+        // show water level
+        char temp[6];
+        dtostrf(r.value, 2, 2, temp);
 
-    (void) readings.add(&reading);
-    log(&reading, "Ph:");
+        clear(msg); // clear previous message
+        strcpy(msg, "Temp: ");
+        strcat(msg, temp);
+        Logger::log(msg);  // log water level       
+    }
 }
 
 void send_data()
 {
-    esp.send_post_request(HOST, &readings);
+    if (!readings.is_empty())
+    {
+        Logger::log("Sending data...");
+        bool is_sent = esp.send_post_request(HOST, readings);
+
+        if (is_sent)
+            Logger::log("Data sent.");
+        else
+            Logger::log("Failure.");
+    }
+    else
+        Logger::log("Queue empty");
 }
