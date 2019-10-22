@@ -34,3 +34,8 @@ float Sensor::_avg()
     _readings_count = -1;  // restart counter after data sending
     return _avg;  // return average of readings
 }
+
+void Sensor::attach_relay(int pin)
+{
+    relay = new Relay(pin);
+}

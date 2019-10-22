@@ -34,7 +34,7 @@ bool ESP::connect_wifi(const char *ssid, const char *pwd)
     print_serial(_command, _self);  // send to the buffer
     
     int i = 0;
-    _is_connected = false;  // set ESP as not connected
+    // _is_connected = false;  // set ESP as not connected
     
     while (!_is_connected)
     {
@@ -47,16 +47,16 @@ bool ESP::connect_wifi(const char *ssid, const char *pwd)
             if(strstr(_last_status, "FAIL")) 
             {
                 Logger::log(_last_status);  // show the error message
-//                _handle_err(&resp); // parse response to check error
                break;
             }
             else if (strstr(_last_status, "OK"))
             {
                 char msg[100];
                 sprintf(msg, "Connected to: %s", ssid);
-                Logger::log(msg);
+                Logger::log(msg, LogLevel::VERBOSE);
 
                 clear_buffer(_self);
+                clear(msg);
                 _is_connected = true;
             }
         }
@@ -64,26 +64,29 @@ bool ESP::connect_wifi(const char *ssid, const char *pwd)
             delay(500);  // wait for new data
 
         if (i == 50)    
-            Logger::log("Connection takes longer then expected...");
+            Logger::log(F("Connection takes longer then expected..."), LogLevel::WARNING);
         if (i >= 100)
         {
-            Logger::log("Connection timeout");
+            Logger::log(F("Connection timeout"), LogLevel::ERROR);
             break;
         }
         i++;
     }
 
     clear_buffer(_self);
+    _connection_status = _is_connected ? WIFI_CONNECTED : DISCONECTED;
     return _is_connected;
 }
 
 bool ESP::connect_host(const char *host)
 {
-    char status = connection_status();  // get connection status
+    (void) check_connection_status();  // get connection status
 
-    // check if connection is not open
-    if (status == '3') 
-        return true;  // return true if connection is alive
+    // check if connection is still alive
+    if (_connection_status == HOST_CONNECTED)
+        return true;  // end if it is
+    else if (_connection_status == DISCONECTED)
+        return false;  // do not try co connect if not connected with AP    
 
     // otherwise open new connection
     clear(_command);  // clear previous command
@@ -92,24 +95,51 @@ bool ESP::connect_host(const char *host)
     return execute_at(_command); 
 }
 
-char ESP::connection_status()
+ConnectionStatus ESP::check_connection_status()
 { 
-    (void) execute_at("AT+CIPSTATUS"); // get current connection status   
-    return _last_status[7]; // return status char
+    if(!execute_at("AT+CIPSTATUS")) // get current connection status   
+        return UNKNOWN;
+    
+    char status = _last_status[7];  // it is important to have ESP echo turned off
+    switch (status)
+    {
+    case '2':
+        _connection_status = WIFI_CONNECTED;
+        break;
+    case '3':
+        _connection_status = HOST_CONNECTED;
+        break;
+    case '4':
+        _connection_status = HOST_DISCONNECTED;
+        break;
+    case '5':
+        _connection_status = DISCONECTED;
+        break;
+    default:
+        _connection_status = UNKNOWN;
+        break;
+    }
+
+    return _connection_status;
+}
+
+ConnectionStatus ESP::get_connection_status()
+{
+    return _connection_status;
 }
 
 bool ESP::send_post_request(const char *host, const ReadingsQueue &queue)
 {
-    Logger::log("Connecting to the host...");
+    Logger::log(F("Connecting to the host..."), LogLevel::VERBOSE);
 
     // Check if connection is still alive...
     if (!connect_host(host)) 
     {
-        Logger::log("Can not connect to host");
+        Logger::log(F("Can not connect to host"), LogLevel::ERROR);
         return false;
     } 
 
-    Logger::log("Creating post request string...");
+    Logger::log(F("Creating post request string..."), LogLevel::VERBOSE);
     queue.generate_post_request(_post_data, ";");  // generate post data string
     strcat (_post_data, "&user=aquarium_arduino&pwd=test");  // add user and pwd 
 
@@ -124,7 +154,7 @@ bool ESP::send_post_request(const char *host, const ReadingsQueue &queue)
             "%s", strlen(_post_data), _post_data);
     
     // Logger::log(_command);
-    Logger::log("Openning connection...");
+    Logger::log(F("Openning connection..."), LogLevel::VERBOSE);
 
     // I want to have post request data ready to send
     // thus i am sending AT command manually
@@ -133,15 +163,15 @@ bool ESP::send_post_request(const char *host, const ReadingsQueue &queue)
     _self->flush();  // wait for data transfer
     delay(500);  // wait for the response
 
-    Logger::log("Reading response from the ESP...");
+    Logger::log(F("Reading response from the ESP..."), LogLevel::VERBOSE);
     read_serial(_last_status, 256, _self);  // get ESP response
 
     if (strstr(_last_status, ">")) // response as expected
-        Logger::log("Sending data..."); 
+        Logger::log(F("Sending data..."), LogLevel::VERBOSE); 
     else // ups...
     {
-        Logger::log("Sending error, ESP response below:");
-        Logger::log(_last_status);
+        Logger::log(F("Sending error, ESP response below:"), LogLevel::ERROR);
+        Logger::log(_last_status, LogLevel::ERROR);
 
         // clear the data
         clear(_post_data);
@@ -155,13 +185,13 @@ bool ESP::send_post_request(const char *host, const ReadingsQueue &queue)
     _self->print(_command);  // sending post request
     _self->flush();  // wait for transfer
 
-    Logger::log("Post request data sent...");
-    Logger::log("Waiting for feedback.");
+    Logger::log(F("Post request data sent..."), LogLevel::VERBOSE);
+    Logger::log(F("Waiting for feedback."), LogLevel::VERBOSE);
     delay(1000);  // wait to read full response
 
-    Logger::log("ESP response:");
+    // Logger::log(F("ESP response:"));
     read_serial(_last_status, 256, _self);
-    Logger::log(_last_status);
+    // Logger::log(_last_status);
 
     // clear the data
     clear(_post_data);
@@ -212,8 +242,8 @@ bool ESP::execute_at(const char *cmd, const char *escape)
     
     if (i==10)
     {
-        Logger::log("Connection timeout. ESP response:");
-        Logger::log(_last_status);
+        Logger::log(F("Connection timeout. ESP response:"), LogLevel::ERROR);
+        Logger::log(_last_status, LogLevel::ERROR);
     }
 
     clear_buffer(_self);  // remove leftovers
@@ -245,8 +275,8 @@ bool ESP::_execute_at(const char *cmd, const char *escape)
         if (strstr(_last_status, "OK"))
             break; // break if serial is ready
 
-        Logger::log("Waiting for serial to free...");
-        delay(1000);
+        Logger::log(F("Waiting for serial to free..."), LogLevel::WARNING);
+        delay(500);
     }
     return false; // force next command execution
 }

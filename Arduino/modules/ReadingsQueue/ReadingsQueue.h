@@ -5,6 +5,7 @@
 
 #include <Arduino.h>
 #include <Sensor.h>
+#include <Log.h>
 
 class ReadingsQueue
 {

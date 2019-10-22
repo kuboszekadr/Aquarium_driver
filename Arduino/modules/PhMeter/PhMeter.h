@@ -4,15 +4,19 @@
 #define SAMPLING_INTERVAL 1000
 
 #include "Arduino.h"
+#include "Sensor.h"
+#include "Utils.h"
+#include "RTC.h"
 
-class PhMeter
+#define UPPER_LEVEL 6.9
+#define LOWER_LEVEL 6.5
+
+class PhMeter: public Sensor
 {
     public:
         PhMeter(int pin, int id_sensor);
-        
-        float get_ph();
-        int get_id_sensor();
-    
+        bool make_reading();
+
     private:
         int _pin;
         int _id_sensor;

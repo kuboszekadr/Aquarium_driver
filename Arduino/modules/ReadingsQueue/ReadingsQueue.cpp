@@ -3,7 +3,8 @@
 // returns first element from the queue
 Reading ReadingsQueue::pop()
 {
-    if (_size == 0) { return; } // return nothing if queue is empty
+    if (_size == 0) 
+        return; // return nothing if queue is empty
     
     Reading r = _queue[_front];
     _front = (_front + 1) % MAX_SIZE;
@@ -13,13 +14,16 @@ Reading ReadingsQueue::pop()
 }
 
 // adds new reading in the end of the list
+// TODO: change for & to make sure that non empty element is passed
 bool ReadingsQueue::add(Reading *reading)
 {
-    if (_size == MAX_SIZE) { return false; }
+    if (_size == MAX_SIZE) 
+        return false; // exit is queue full
 
-    _size++;
-    _queue[_rear] = *reading;
-    _rear = (_rear + 1) % MAX_SIZE;
+    // add new element
+    _size++;  // increase queue size
+    _queue[_rear] = *reading;  // add element to the end
+    _rear = (_rear + 1) % MAX_SIZE;  //get position for next element
 
     return true;
 }

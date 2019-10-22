@@ -27,8 +27,10 @@ void read_serial(char *arr, int arr_size, SoftwareSerial *serial)
 
     if(serial->available() & i >= (arr_size-1))
     {
-        Logger::log("Warning serial response longer then array size.");
-        Logger::log("Leftover below:");
+        Logger::log(F("Serial response longer then array size."), LogLevel::WARNING);
+        Logger::log(F("Leftover below:"), LogLevel::WARNING);
+        
+        // TODO: add array to hold the response
         while((serial->available()))
             Serial.print(serial->read());
         Serial.println();
